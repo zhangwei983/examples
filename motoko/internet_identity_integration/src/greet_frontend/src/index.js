@@ -1,6 +1,7 @@
 import {createActor, greet_backend} from "../../declarations/greet_backend";
 import {AuthClient} from "@dfinity/auth-client"
 import {HttpAgent} from "@dfinity/agent";
+import {DelegationIdentity, Ed25519KeyIdentity, DelegationChain } from "@dfinity/identity";
 
 let actor = greet_backend;
 
@@ -20,12 +21,18 @@ greetButton.onclick = async (e) => {
     return false;
 };
 
+// Identities to delegate.
+let middleKey = Ed25519KeyIdentity.generate();
+let bottomKey = Ed25519KeyIdentity.generate();
+
 const loginButton = document.getElementById("login");
 loginButton.onclick = async (e) => {
     e.preventDefault();
 
     // create an auth client
-    let authClient = await AuthClient.create();
+    let authClient = await AuthClient.create({
+        identity: middleKey,
+        });
 
     // start the login process and wait for it to finish
     await new Promise((resolve) => {
@@ -36,9 +43,24 @@ loginButton.onclick = async (e) => {
     });
 
     // At this point we're authenticated, and we can get the identity from the auth client:
-    const identity = authClient.getIdentity();
-    // Using the identity obtained from the auth client, we can create an agent to interact with the IC.
-    const agent = new HttpAgent({identity});
+    const middleIdentity = authClient.getIdentity();
+
+    // Chain the bottom key.
+    let bottomIdentity;
+    if (middleIdentity instanceof DelegationIdentity) {
+        let middleToBottom = await DelegationChain.create(
+            middleKey,
+            bottomKey.getPublicKey(),
+            new Date(Date.now() + 15 * 60 * 1000),
+            { previous: middleIdentity.getDelegation() },
+        );
+
+        bottomIdentity = DelegationIdentity.fromDelegation(bottomKey, middleToBottom);
+    }
+
+    // Using the identity chained manually, we can create an agent to interact with the IC.
+    const agent = new HttpAgent({identity: bottomIdentity});
+
     // Using the interface description of our webapp, we create an actor that we use to call the service methods.
     actor = createActor(process.env.GREET_BACKEND_CANISTER_ID, {
         agent,
